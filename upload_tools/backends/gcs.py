@@ -38,12 +38,31 @@ def upload_to_gcs(file_object, file_name: str, gcscfg, signed_url_expires_in: in
         file_object.seek(0)  # Reset file pointer to beginning
         blob.upload_from_file(file_object, content_type=content_type)
 
-        # Generate a signed URL valid for configured duration
-        url = blob.generate_signed_url(
-            version="v4",
-            expiration=timedelta(seconds=signed_url_expires_in),
-            method="GET"
-        )
+        # Generate a signed URL valid for configured duration.
+        # When using Workload Identity Federation (WIF) or other federated
+        # credentials without a local private key, the default signing path
+        # fails.  In that case we use the IAM signBlob API by passing the
+        # service account email and an access token explicitly.
+        signing_kwargs = {
+            "version": "v4",
+            "expiration": timedelta(seconds=signed_url_expires_in),
+            "method": "GET",
+        }
+
+        if gcscfg.credentials_path:
+            # Key-file credentials can sign locally — no extra args needed.
+            url = blob.generate_signed_url(**signing_kwargs)
+        else:
+            # Federated / ADC credentials: delegate signing to IAM signBlob.
+            import google.auth
+            import google.auth.transport.requests
+
+            credentials, _ = google.auth.default()
+            credentials.refresh(google.auth.transport.requests.Request())
+
+            signing_kwargs["service_account_email"] = credentials.service_account_email
+            signing_kwargs["access_token"] = credentials.token
+            url = blob.generate_signed_url(**signing_kwargs)
 
         return f"Link to created document to be shared with user in markdown format: {url} . Link is valid for {signed_url_expires_in} seconds."
 
