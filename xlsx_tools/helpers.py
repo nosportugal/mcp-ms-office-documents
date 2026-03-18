@@ -359,8 +359,6 @@ def add_table_to_sheet(
                 if row_idx == 0:
                     cell.font = header_font
                     cell.fill = header_fill
-                elif isinstance(cell.value, float) and 0 < cell.value <= 1:
-                    cell.number_format = '0.00%'
                 elif isinstance(cell.value, (int, float)) and cell.value >= 1000:
                     cell.number_format = '#,##0'
             except Exception as e:
