@@ -1403,6 +1403,313 @@ class TestIntegration:
 
 
 # =============================================================================
+# Markdown Tables in Placeholders Tests
+# =============================================================================
+
+class TestTablesInPlaceholders:
+    """Tests for markdown table syntax in placeholder values."""
+
+    def test_value_contains_block_content_detection_table(self):
+        """Test that contains_block_markdown detects table lines."""
+        table_md = "| Col1 | Col2 |\n|------|------|\n| A    | B    |"
+        assert contains_block_markdown(table_md) is True
+
+    def test_simple_table_in_placeholder(self):
+        """Test replacing a placeholder with a markdown table."""
+        doc = Document()
+        para = doc.add_paragraph()
+        para.add_run("{{data}}")
+
+        context = {
+            "data": "| Name | Age |\n|------|-----|\n| Alice | 30 |\n| Bob | 25 |"
+        }
+
+        _replace_placeholders_in_document(doc, context)
+
+        path = save_document(doc, "table_md_01_simple.docx")
+        assert path.exists()
+
+        doc2 = Document(path)
+        # Should have at least one table
+        assert len(doc2.tables) >= 1
+        table = doc2.tables[0]
+        assert len(table.rows) == 3  # header row + 2 data rows (separator is filtered)
+        assert "Name" in table.cell(0, 0).text
+        assert "Alice" in table.cell(1, 0).text
+        assert "Bob" in table.cell(2, 0).text
+
+    def test_table_with_preceding_text(self):
+        """Test placeholder with text before the table."""
+        doc = Document()
+        para = doc.add_paragraph()
+        para.add_run("Before {{content}} After")
+
+        context = {
+            "content": "Here is the data:\n\n| H1 | H2 |\n|----|----|\n| V1 | V2 |"
+        }
+
+        _replace_placeholders_in_document(doc, context)
+
+        path = save_document(doc, "table_md_02_with_text.docx")
+        assert path.exists()
+
+        doc2 = Document(path)
+        assert len(doc2.tables) >= 1
+
+    def test_table_with_inline_formatting_in_cells(self):
+        """Test markdown table with formatted cell content."""
+        doc = Document()
+        para = doc.add_paragraph()
+        para.add_run("{{report}}")
+
+        context = {
+            "report": "| Feature | Status |\n|---------|--------|\n| **Auth** | *Done* |\n| `API` | Pending |"
+        }
+
+        _replace_placeholders_in_document(doc, context)
+
+        path = save_document(doc, "table_md_03_formatted_cells.docx")
+        assert path.exists()
+
+        doc2 = Document(path)
+        assert len(doc2.tables) >= 1
+
+    def test_table_mixed_with_lists(self):
+        """Test placeholder with both table and list content."""
+        doc = Document()
+        para = doc.add_paragraph()
+        para.add_run("{{content}}")
+
+        context = {
+            "content": "Summary:\n\n- Item 1\n- Item 2\n\n| Col A | Col B |\n|-------|-------|\n| X | Y |"
+        }
+
+        _replace_placeholders_in_document(doc, context)
+
+        path = save_document(doc, "table_md_04_mixed.docx")
+        assert path.exists()
+
+        doc2 = Document(path)
+        assert len(doc2.tables) >= 1
+
+
+# =============================================================================
+# Header/Footer with Existing Template Tests
+# =============================================================================
+
+class TestHeaderFooterWithTemplate:
+    """Tests for header/footer handling when the template already has headers/footers."""
+
+    def test_set_header_preserves_alignment(self):
+        """Test that set_header_footer preserves existing paragraph alignment."""
+        from docx_tools.helpers import set_header_footer
+
+        doc = Document()
+        section = doc.sections[0]
+        header = section.header
+        header_para = header.paragraphs[0]
+        header_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        header_para.add_run("Old header text")
+
+        doc.add_paragraph("Body content for visual inspection.")
+
+        set_header_footer(doc, "New header text", 'header')
+
+        # Alignment should be preserved from template
+        assert section.header.paragraphs[0].alignment == WD_ALIGN_PARAGRAPH.RIGHT
+        assert "New header text" in section.header.paragraphs[0].text
+
+        path = save_document(doc, "header_tpl_01_preserves_alignment.docx")
+        assert path.exists()
+
+    def test_set_footer_all_sections(self):
+        """Test that set_header_footer updates all sections."""
+        from docx_tools.helpers import set_header_footer
+
+        doc = Document()
+        doc.add_paragraph("Section 1 content.")
+        # Add a second section
+        doc.add_section()
+        doc.add_paragraph("Section 2 content.")
+        assert len(doc.sections) == 2
+
+        set_header_footer(doc, "Page {page} of {pages}", 'footer')
+
+        # Both sections should have the footer
+        for section in doc.sections:
+            footer_text = section.footer.paragraphs[0].text
+            # The text between fields is preserved; PAGE/NUMPAGES are fields
+            assert "Page" in footer_text or len(section.footer.paragraphs[0].runs) > 0
+
+        path = save_document(doc, "header_tpl_02_footer_all_sections.docx")
+        assert path.exists()
+
+    def test_set_header_replaces_existing_content(self):
+        """Test that existing header content is replaced, not appended."""
+        from docx_tools.helpers import set_header_footer
+
+        doc = Document()
+        section = doc.sections[0]
+        header = section.header
+        header.paragraphs[0].add_run("Original header content")
+
+        doc.add_paragraph("Body content for visual inspection.")
+
+        set_header_footer(doc, "Replacement header", 'header')
+
+        header_text = section.header.paragraphs[0].text
+        assert "Original header content" not in header_text
+        assert "Replacement header" in header_text
+
+        path = save_document(doc, "header_tpl_03_replaces_existing.docx")
+        assert path.exists()
+
+    def test_set_header_with_page_fields(self):
+        """Test header with page number tokens."""
+        from docx_tools.helpers import set_header_footer
+
+        doc = Document()
+        doc.add_paragraph("Body content for visual inspection.")
+
+        set_header_footer(doc, "Page {page} of {pages}", 'header')
+
+        # Should have runs with text and field elements
+        p = doc.sections[0].header.paragraphs[0]
+        assert len(p.runs) > 0
+
+        path = save_document(doc, "header_tpl_04_page_fields.docx")
+        assert path.exists()
+
+    def test_placeholder_in_first_page_header(self):
+        """Test placeholder replacement in first-page header of a template."""
+        doc = Document()
+        section = doc.sections[0]
+        section.different_first_page_header_footer = True
+
+        # Add placeholder to first-page header
+        first_header = section.first_page_header
+        first_header.paragraphs[0].add_run("{{company}} - First Page")
+
+        # Add placeholder to default header
+        default_header = section.header
+        default_header.paragraphs[0].add_run("{{company}} - Other Pages")
+
+        doc.add_paragraph("Body content")
+
+        context = {"company": "Acme Corp"}
+        _replace_placeholders_in_document(doc, context)
+
+        path = save_document(doc, "header_03_first_page.docx")
+        assert path.exists()
+
+        doc2 = Document(path)
+        s = doc2.sections[0]
+        assert "Acme Corp" in s.first_page_header.paragraphs[0].text
+        assert "{{company}}" not in s.first_page_header.paragraphs[0].text
+        assert "Acme Corp" in s.header.paragraphs[0].text
+        assert "{{company}}" not in s.header.paragraphs[0].text
+
+
+# =============================================================================
+# Font Color Preservation Tests
+# =============================================================================
+
+class TestFontColorPreservation:
+    """Tests for preserving font color from template placeholders."""
+
+    def test_color_preserved_on_replacement(self):
+        """Test that font color from the placeholder run is preserved."""
+        from docx.shared import RGBColor
+
+        doc = Document()
+        para = doc.add_paragraph()
+        run = para.add_run("{{colored_text}}")
+        run.font.color.rgb = RGBColor(0xFF, 0x00, 0x00)  # Red
+
+        context = {"colored_text": "This should be red"}
+
+        _replace_placeholders_in_document(doc, context)
+
+        path = save_document(doc, "color_01_preserved.docx")
+        assert path.exists()
+
+        doc2 = Document(path)
+        para = doc2.paragraphs[0]
+        # Check that at least one run has the red color
+        red_runs = [r for r in para.runs if r.font.color.rgb == RGBColor(0xFF, 0x00, 0x00)]
+        assert len(red_runs) > 0, "Replacement text should preserve red color"
+
+    def test_color_preserved_with_inline_formatting(self):
+        """Test that color is preserved even with markdown formatting."""
+        from docx.shared import RGBColor
+
+        doc = Document()
+        para = doc.add_paragraph()
+        run = para.add_run("{{styled}}")
+        run.font.color.rgb = RGBColor(0x00, 0x80, 0x00)  # Green
+        run.font.size = Pt(14)
+
+        context = {"styled": "This is **bold** and *italic*"}
+
+        _replace_placeholders_in_document(doc, context)
+
+        path = save_document(doc, "color_02_with_formatting.docx")
+        assert path.exists()
+
+        doc2 = Document(path)
+        para = doc2.paragraphs[0]
+        green_runs = [r for r in para.runs if r.font.color.rgb == RGBColor(0x00, 0x80, 0x00)]
+        assert len(green_runs) > 0, "Replacement text should preserve green color"
+
+    def test_no_color_no_override(self):
+        """Test that when no color is set, replacement runs don't get unexpected color."""
+        doc = Document()
+        para = doc.add_paragraph()
+        para.add_run("{{plain}}")
+
+        context = {"plain": "No color specified"}
+
+        _replace_placeholders_in_document(doc, context)
+
+        path = save_document(doc, "color_03_no_color.docx")
+        assert path.exists()
+
+        doc2 = Document(path)
+        para = doc2.paragraphs[0]
+        for run in para.runs:
+            # Should not have a color set (None or default)
+            assert run.font.color.rgb is None, "Run should not have color when template has no color"
+
+    def test_multiple_placeholders_different_colors(self):
+        """Test multiple placeholders with different colors in the same paragraph."""
+        from docx.shared import RGBColor
+
+        doc = Document()
+        para = doc.add_paragraph()
+        run1 = para.add_run("{{red_text}} and {{blue_text}}")
+        # Note: in a real template each placeholder would be in its own run
+        # For testing we create separate runs
+        para.clear()
+        r1 = para.add_run("{{red_text}}")
+        r1.font.color.rgb = RGBColor(0xFF, 0x00, 0x00)
+        r2 = para.add_run(" and ")
+        r3 = para.add_run("{{blue_text}}")
+        r3.font.color.rgb = RGBColor(0x00, 0x00, 0xFF)
+
+        context = {"red_text": "Red content", "blue_text": "Blue content"}
+
+        _replace_placeholders_in_document(doc, context)
+
+        path = save_document(doc, "color_04_multiple_colors.docx")
+        assert path.exists()
+
+        doc2 = Document(path)
+        full_text = doc2.paragraphs[0].text
+        assert "Red content" in full_text
+        assert "Blue content" in full_text
+
+
+# =============================================================================
 # Comprehensive Visual Inspection Test
 # =============================================================================
 

@@ -198,9 +198,13 @@ def parse_table(lines, start_idx):
 
 
 def add_table_to_doc(table_data, doc):
-    """Add table data to Word document."""
+    """Add table data to Word document.
+
+    Returns the created ``Table`` object, or ``None`` when the table could
+    not be created (empty data or exception).
+    """
     if not table_data:
-        return
+        return None
 
     rows = len(table_data)
     cols = max(len(row) for row in table_data) if table_data else 0
@@ -214,7 +218,7 @@ def add_table_to_doc(table_data, doc):
             word_table = doc.add_table(rows=rows, cols=cols)
         except Exception as e2:
             logger.error("Failed to create table: %s", e2, exc_info=True)
-            return
+            return None
 
     for i, row_data in enumerate(table_data):
         for j, cell_text in enumerate(row_data):
@@ -226,6 +230,8 @@ def add_table_to_doc(table_data, doc):
                     parse_inline_formatting(cell_text, cell.paragraphs[0])
                 except Exception as e:
                     logger.warning("Failed to populate table cell [%d, %d]: %s", i, j, e)
+
+    return word_table
 
 
 # ---------------------------------------------------------------------------
@@ -317,11 +323,13 @@ HEADING_PATTERN = re.compile(r'^(#{1,6})\s+(.+)$')
 PAGE_BREAK_PATTERN = re.compile(r'^-{3,}\s*$')
 HORIZONTAL_LINE_PATTERN = re.compile(r'^\*{3,}\s*$')
 IMAGE_PATTERN = re.compile(r'^!\[([^\]]*)\]\(([^)]+)\)$')
+TABLE_LINE_PATTERN = re.compile(r'^\|.+\|$')
 
 # All block-level patterns checked by contains_block_markdown
 _BLOCK_PATTERNS = [
     ORDERED_LIST_PATTERN, UNORDERED_LIST_PATTERN, HEADING_PATTERN,
     PAGE_BREAK_PATTERN, HORIZONTAL_LINE_PATTERN, IMAGE_PATTERN,
+    TABLE_LINE_PATTERN,
 ]
 
 
@@ -482,27 +490,65 @@ _PAGE_TOKEN_RE = re.compile(r'(\{page}|\{pages})')
 def set_header_footer(doc, text, kind='header'):
     """Set document header or footer text.
 
+    Iterates over **all** document sections.  For each section the default
+    header/footer is updated, and — when the section uses a different first-page
+    header/footer — that variant is updated as well.
+
+    Pre-existing paragraph formatting (alignment, style) from the template is
+    preserved; only run content is replaced.
+
     Args:
         doc: The Word document.
         text: Content string.  Use ``{page}`` / ``{pages}`` for field tokens.
         kind: ``'header'`` or ``'footer'``.
     """
-    section_part = getattr(doc.sections[0], kind)
-    section_part.is_linked_to_previous = False
-    if section_part.paragraphs:
-        p = section_part.paragraphs[0]
-        for run in list(p.runs):
-            p._p.remove(run._r)
-    else:
-        p = section_part.add_paragraph()
-    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
     _TOKEN_MAP = {'{page}': 'PAGE', '{pages}': 'NUMPAGES'}
-    for part in _PAGE_TOKEN_RE.split(text):
-        if part in _TOKEN_MAP:
-            _add_field(p, _TOKEN_MAP[part])
-        elif part:
-            p.add_run(part)
+
+    def _fill_paragraph(p, content):
+        """Clear existing runs/fields and write *content* into paragraph *p*."""
+        # Preserve existing alignment if set
+        existing_alignment = p.alignment
+
+        # Remove all existing child run (<w:r>) and field elements
+        for child in list(p._p):
+            tag = child.tag.split('}')[-1] if '}' in child.tag else child.tag
+            if tag in ('r', 'hyperlink', 'fldSimple'):
+                p._p.remove(child)
+
+        for part in _PAGE_TOKEN_RE.split(content):
+            if part in _TOKEN_MAP:
+                _add_field(p, _TOKEN_MAP[part])
+            elif part:
+                p.add_run(part)
+
+        # Restore alignment – fall back to CENTER when the template had none
+        p.alignment = existing_alignment if existing_alignment is not None else WD_ALIGN_PARAGRAPH.CENTER
+
+    def _update_part(section_part):
+        """Update a single header or footer part."""
+        section_part.is_linked_to_previous = False
+        if section_part.paragraphs:
+            _fill_paragraph(section_part.paragraphs[0], text)
+        else:
+            p = section_part.add_paragraph()
+            _fill_paragraph(p, text)
+
+    for section in doc.sections:
+        # Default header / footer
+        _update_part(getattr(section, kind))
+
+        # First-page header / footer (when the template enables it)
+        if section.different_first_page_header_footer:
+            first_kind = f'first_page_{kind}'
+            first_part = getattr(section, first_kind, None)
+            if first_part is not None:
+                _update_part(first_part)
+
+        # Even-page header / footer
+        even_kind = f'even_page_{kind}'
+        even_part = getattr(section, even_kind, None)
+        if even_part is not None and doc.settings.element.find(qn('w:evenAndOddHeaders')) is not None:
+            _update_part(even_part)
 
 
 # ---------------------------------------------------------------------------
@@ -569,11 +615,11 @@ def process_markdown_block(doc, lines, start_idx, return_element=True):
     stripped = line.strip()
     elements = []
 
-    def _collect(para_element):
-        """If return_element, detach *para_element* from body and collect it."""
+    def _collect(element):
+        """If return_element, detach *element* (paragraph or table) from body and collect it."""
         if return_element:
-            elements.append(para_element)
-            doc._body._body.remove(para_element)
+            elements.append(element)
+            doc._body._body.remove(element)
 
     try:
         # Heading
@@ -584,6 +630,17 @@ def process_markdown_block(doc, lines, start_idx, return_element=True):
             parse_inline_formatting(heading_match.group(2), heading)
             _collect(heading._p)
             return start_idx + 1, elements
+
+        # Table (lines starting with |)
+        if TABLE_LINE_PATTERN.match(stripped):
+            table_data, next_idx = parse_table(lines, start_idx)
+            if table_data:
+                word_table = add_table_to_doc(table_data, doc)
+                if word_table is not None:
+                    _collect(word_table._tbl)
+                return next_idx, elements
+            # Not a valid table (e.g. single pipe line) — fall through to
+            # emit as a regular paragraph below.
 
         # Page break (---)
         if PAGE_BREAK_PATTERN.match(stripped):

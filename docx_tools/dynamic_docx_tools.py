@@ -191,6 +191,8 @@ def _replace_placeholder_in_paragraph(
 
         font_name = formatting_run.font.name if formatting_run else None
         font_size = formatting_run.font.size if formatting_run else None
+        font_color_rgb = formatting_run.font.color.rgb if formatting_run else None
+        font_color_theme = formatting_run.font.color.theme_color if formatting_run else None
 
         # Strategy: Rebuild the paragraph content
         # 1. Get text before placeholder
@@ -231,7 +233,7 @@ def _replace_placeholder_in_paragraph(
             parse_inline_formatting(value, paragraph)
 
             # Apply font formatting to newly added runs (from replacement)
-            if font_name or font_size:
+            if font_name or font_size or font_color_rgb or font_color_theme:
                 # Get runs added after text_before
                 new_runs = list(paragraph.runs)
                 start_idx = 1 if text_before else 0
@@ -240,6 +242,10 @@ def _replace_placeholder_in_paragraph(
                         run.font.name = font_name
                     if font_size and not run.font.size:
                         run.font.size = font_size
+                    if font_color_rgb and not run.font.color.rgb:
+                        run.font.color.rgb = font_color_rgb
+                    elif font_color_theme and not run.font.color.theme_color:
+                        run.font.color.theme_color = font_color_theme
 
             # Add text after placeholder
             if text_after:
@@ -351,20 +357,35 @@ def _replace_placeholders_in_document(doc: DocxDocument, context: Dict[str, str]
 
     # Process headers and footers
     for section in doc.sections:
-        # Header
-        if section.header:
-            for paragraph in section.header.paragraphs:
-                # Headers/footers: don't support block content
-                _replace_placeholders_in_paragraph(paragraph, context, doc=None)
-            for table in section.header.tables:
-                _replace_placeholders_in_table(table, context, doc=None)
+        # Collect all header/footer parts to process
+        parts = []
 
-        # Footer
+        # Default header and footer
+        if section.header:
+            parts.append(section.header)
         if section.footer:
-            for paragraph in section.footer.paragraphs:
+            parts.append(section.footer)
+
+        # First-page header/footer (when template uses "Different First Page")
+        if section.different_first_page_header_footer:
+            if section.first_page_header:
+                parts.append(section.first_page_header)
+            if section.first_page_footer:
+                parts.append(section.first_page_footer)
+
+        # Even-page header/footer (when template uses "Different Even & Odd Pages")
+        even_page_header = getattr(section, 'even_page_header', None)
+        even_page_footer = getattr(section, 'even_page_footer', None)
+        if even_page_header:
+            parts.append(even_page_header)
+        if even_page_footer:
+            parts.append(even_page_footer)
+
+        for part in parts:
+            for paragraph in part.paragraphs:
                 # Headers/footers: don't support block content
                 _replace_placeholders_in_paragraph(paragraph, context, doc=None)
-            for table in section.footer.tables:
+            for table in part.tables:
                 _replace_placeholders_in_table(table, context, doc=None)
 
 

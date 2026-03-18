@@ -374,6 +374,51 @@ class TestAdjustFormulaReferencesUnit:
         assert result == "=Revenue!B2-B4"
 
 
+class TestNumberFormats:
+    """Tests for cell number_format (percent, thousands separator)."""
+
+    def test_percent_cells_get_percent_format(self):
+        """Cells with '50%' should be stored as 0.5 with number_format '0%'."""
+        markdown = """| Metric | Rate |
+|--------|------|
+| Growth | 50%  |
+| Margin | 8%   |
+"""
+        wb = _create_workbook_from_markdown(markdown)
+        ws = wb.active
+        # Data rows start at row 2 (row 1 = header)
+        growth_cell = ws.cell(row=2, column=2)
+        margin_cell = ws.cell(row=3, column=2)
+        assert growth_cell.value == pytest.approx(0.5)
+        assert growth_cell.number_format == '0%'
+        assert margin_cell.value == pytest.approx(0.08)
+        assert margin_cell.number_format == '0%'
+
+    def test_non_percent_number_no_percent_format(self):
+        """A plain decimal like 0.5 (without '%') should NOT get '0%' format."""
+        markdown = """| Item  | Value |
+|-------|-------|
+| Alpha | 0.5   |
+"""
+        wb = _create_workbook_from_markdown(markdown)
+        ws = wb.active
+        cell = ws.cell(row=2, column=2)
+        assert cell.value == pytest.approx(0.5)
+        assert cell.number_format != '0%'
+
+    def test_thousands_separator_format(self):
+        """Values >= 1000 should get '#,##0' number format."""
+        markdown = """| Item | Amount |
+|------|--------|
+| Rent | 5000   |
+"""
+        wb = _create_workbook_from_markdown(markdown)
+        ws = wb.active
+        cell = ws.cell(row=2, column=2)
+        assert cell.value == 5000
+        assert cell.number_format == '#,##0'
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])
 
