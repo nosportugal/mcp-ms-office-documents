@@ -336,6 +336,7 @@ def add_table_to_sheet(
                 cell = worksheet.cell(row=current_excel_row, column=col_idx + 1)
                 clean_text, formatting_info = parse_cell_formatting(cell_text)
                 formula_value = detect_formula_pattern(clean_text)
+                is_percent = clean_text.strip().endswith('%')
 
                 if isinstance(formula_value, str) and formula_value.startswith('='):
                     adjusted_formula = adjust_formula_references(formula_value, current_excel_row, table_positions, all_sheet_table_positions)
@@ -361,6 +362,10 @@ def add_table_to_sheet(
                     cell.fill = header_fill
                 elif isinstance(cell.value, (int, float)) and cell.value >= 1000:
                     cell.number_format = '#,##0'
+
+                # Apply percentage number format when the original text was a percent
+                if is_percent and isinstance(cell.value, (int, float)):
+                    cell.number_format = '0%'
             except Exception as e:
                 logger.warning("Error processing cell [row=%d, col=%d]: %s", current_excel_row, col_idx + 1, e)
 
