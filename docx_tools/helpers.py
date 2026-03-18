@@ -198,9 +198,13 @@ def parse_table(lines, start_idx):
 
 
 def add_table_to_doc(table_data, doc):
-    """Add table data to Word document."""
+    """Add table data to Word document.
+
+    Returns the created ``Table`` object, or ``None`` when the table could
+    not be created (empty data or exception).
+    """
     if not table_data:
-        return
+        return None
 
     rows = len(table_data)
     cols = max(len(row) for row in table_data) if table_data else 0
@@ -214,7 +218,7 @@ def add_table_to_doc(table_data, doc):
             word_table = doc.add_table(rows=rows, cols=cols)
         except Exception as e2:
             logger.error("Failed to create table: %s", e2, exc_info=True)
-            return
+            return None
 
     for i, row_data in enumerate(table_data):
         for j, cell_text in enumerate(row_data):
@@ -226,6 +230,8 @@ def add_table_to_doc(table_data, doc):
                     parse_inline_formatting(cell_text, cell.paragraphs[0])
                 except Exception as e:
                     logger.warning("Failed to populate table cell [%d, %d]: %s", i, j, e)
+
+    return word_table
 
 
 # ---------------------------------------------------------------------------
@@ -541,7 +547,7 @@ def set_header_footer(doc, text, kind='header'):
         # Even-page header / footer
         even_kind = f'even_page_{kind}'
         even_part = getattr(section, even_kind, None)
-        if even_part is not None and getattr(doc.settings.element.find(qn('w:evenAndOddHeaders')), 'text', None) is not None:
+        if even_part is not None and doc.settings.element.find(qn('w:evenAndOddHeaders')) is not None:
             _update_part(even_part)
 
 
@@ -629,10 +635,12 @@ def process_markdown_block(doc, lines, start_idx, return_element=True):
         if TABLE_LINE_PATTERN.match(stripped):
             table_data, next_idx = parse_table(lines, start_idx)
             if table_data:
-                add_table_to_doc(table_data, doc)
-                # Collect the table XML element (w:tbl, not w:p)
-                _collect(doc.tables[-1]._tbl)
-            return next_idx, elements
+                word_table = add_table_to_doc(table_data, doc)
+                if word_table is not None:
+                    _collect(word_table._tbl)
+                return next_idx, elements
+            # Not a valid table (e.g. single pipe line) — fall through to
+            # emit as a regular paragraph below.
 
         # Page break (---)
         if PAGE_BREAK_PATTERN.match(stripped):
