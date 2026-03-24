@@ -513,7 +513,7 @@ def _register_single_template(mcp: FastMCP, spec: Dict[str, Any]) -> None:
                     doc.save(buffer)
                     buffer.seek(0)
 
-                    result = upload_file(buffer, "docx")
+                    result = upload_file(buffer, "docx", filename=payload.get("file_name") or _name)
                 finally:
                     buffer.close()
 
