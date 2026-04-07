@@ -77,8 +77,8 @@ class S3Settings(BaseModel):
        - **AWS SSO / ``aws sso login`` sessions** — for local
          development after running ``aws sso login``
        - ECS container credentials
-       - **IRSA (IAM Roles for Service Accounts)** — for the deployments in AWS EKS
-         when for the pods running on **AWS EKS**
+       - **IRSA (IAM Roles for Service Accounts)** — for pods running on
+         **AWS EKS**
        - EC2 instance metadata (IMDSv2)
 
     ``S3_BUCKET`` is always required regardless of the credential method.
