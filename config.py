@@ -59,26 +59,80 @@ class LoggingSettings(BaseModel):
 
 
 class S3Settings(BaseModel):
-    """Required credentials and configuration for AWS S3 uploads."""
-    access_key: str
-    secret_key: str
-    region: str
+    """Configuration for AWS S3 uploads.
+
+    Credential resolution follows a layered approach:
+
+    1. **Explicit credentials** — Set ``AWS_ACCESS_KEY`` and
+       ``AWS_SECRET_ACCESS_KEY`` environment variables. Can be used for local
+       development or non-AWS environments. ``AWS_REGION`` is also required
+       when using explicit credentials.
+    2. **AWS default credential chain ** — When
+       the explicit credential env vars are *NOT* set, the boto3 SDK
+       automatically discovers credentials from (in order):
+       - Environment variables (``AWS_ACCESS_KEY_ID``, ``AWS_SECRET_ACCESS_KEY``,
+         ``AWS_SESSION_TOKEN``, ``AWS_DEFAULT_REGION``)
+       - Shared credential / config files (``~/.aws/credentials``,
+         ``~/.aws/config``)
+       - **AWS SSO / ``aws sso login`` sessions** — for local
+         development after running ``aws sso login``
+       - ECS container credentials
+       - **IRSA (IAM Roles for Service Accounts)** — for the deployments in AWS EKS
+         when for the pods running on **AWS EKS**
+       - EC2 instance metadata (IMDSv2)
+
+    ``S3_BUCKET`` is always required regardless of the credential method.
+    ``AWS_REGION`` is optional when using the default credential chain — boto3
+    will resolve the region from the environment, config files, or instance
+    metadata.
+    """
+    access_key: Optional[str] = None
+    secret_key: Optional[str] = None
+    region: Optional[str] = None
     bucket: str
 
     @model_validator(mode="after")
-    def _non_empty(self) -> "S3Settings":
-        """Ensure all S3 fields are non-empty, raising a helpful error otherwise."""
-        missing = [
-            name for name, val in (
-                ("AWS_ACCESS_KEY", self.access_key),
-                ("AWS_SECRET_ACCESS_KEY", self.secret_key),
-                ("AWS_REGION", self.region),
-                ("S3_BUCKET", self.bucket),
-            ) if not str(val).strip()
-        ]
-        if missing:
-            raise ValueError(f"Missing required S3 settings: {', '.join(missing)}")
+    def _validate(self) -> "S3Settings":
+        """Validate S3 settings.
+
+        - ``bucket`` is always required.
+        - If explicit credentials are partially provided (only one of
+          access_key / secret_key), raise an error — either provide both
+          or neither.
+        - When explicit credentials are provided, ``region`` is required
+          because we construct the endpoint URL from it.
+        """
+        # Normalize empty strings to None
+        if self.access_key is not None and not self.access_key.strip():
+            self.access_key = None
+        if self.secret_key is not None and not self.secret_key.strip():
+            self.secret_key = None
+        if self.region is not None and not self.region.strip():
+            self.region = None
+
+        if not self.bucket or not self.bucket.strip():
+            raise ValueError("Missing required S3 setting: S3_BUCKET")
+        self.bucket = self.bucket.strip()
+
+        has_key = self.access_key is not None
+        has_secret = self.secret_key is not None
+        if has_key != has_secret:
+            raise ValueError(
+                "AWS_ACCESS_KEY and AWS_SECRET_ACCESS_KEY must both be set or both be omitted. "
+                "Omit both to use the AWS default credential chain (IRSA, SSO, instance profile, etc.)."
+            )
+
+        if has_key and has_secret and self.region is None:
+            raise ValueError(
+                "AWS_REGION is required when explicit AWS_ACCESS_KEY / AWS_SECRET_ACCESS_KEY are provided."
+            )
+
         return self
+
+    @property
+    def use_explicit_credentials(self) -> bool:
+        """Return True if explicit AWS credentials were provided."""
+        return self.access_key is not None and self.secret_key is not None
 
 
 class GCSSettings(BaseModel):
@@ -246,9 +300,9 @@ class Config(BaseModel):
 
         if strategy == StorageStrategy.S3.value:
             s3_settings = S3Settings(
-                access_key=os.environ.get("AWS_ACCESS_KEY", ""),
-                secret_key=os.environ.get("AWS_SECRET_ACCESS_KEY", ""),
-                region=os.environ.get("AWS_REGION", ""),
+                access_key=os.environ.get("AWS_ACCESS_KEY") or None,
+                secret_key=os.environ.get("AWS_SECRET_ACCESS_KEY") or None,
+                region=os.environ.get("AWS_REGION") or None,
                 bucket=os.environ.get("S3_BUCKET", ""),
             )
         elif strategy == StorageStrategy.GCS.value:
