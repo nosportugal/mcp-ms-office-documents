@@ -120,6 +120,37 @@ class TestS3SettingsValidation:
         assert cfg.storage.s3.secret_key is None
         assert cfg.storage.s3.region is None
 
+    def test_whitespace_in_credentials_stripped(self):
+        """Leading/trailing whitespace in keys and region should be stripped."""
+        env = _build_env(
+            AWS_ACCESS_KEY="  AKID  ",
+            AWS_SECRET_ACCESS_KEY="  secret  ",
+            AWS_REGION="  us-east-1  ",
+            S3_BUCKET="  ws-bucket  ",
+        )
+        cfg = _get_fresh_config(env)
+
+        assert cfg.storage.s3.access_key == "AKID"
+        assert cfg.storage.s3.secret_key == "secret"
+        assert cfg.storage.s3.region == "us-east-1"
+        assert cfg.storage.s3.bucket == "ws-bucket"
+        assert cfg.storage.s3.use_explicit_credentials is True
+
+    def test_whitespace_only_credentials_normalize_to_none(self):
+        """Whitespace-only credential strings should normalize to None (default chain)."""
+        env = _build_env(
+            AWS_ACCESS_KEY="   ",
+            AWS_SECRET_ACCESS_KEY="   ",
+            AWS_REGION="   ",
+            S3_BUCKET="ws-only-bucket",
+        )
+        cfg = _get_fresh_config(env)
+
+        assert cfg.storage.s3.use_explicit_credentials is False
+        assert cfg.storage.s3.access_key is None
+        assert cfg.storage.s3.secret_key is None
+        assert cfg.storage.s3.region is None
+
     def test_partial_credentials_rejected(self):
         """Only one of access_key / secret_key set — should raise ValueError."""
         env = _build_env(

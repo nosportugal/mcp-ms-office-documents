@@ -102,13 +102,14 @@ class S3Settings(BaseModel):
         - When explicit credentials are provided, ``region`` is required
           because we construct the endpoint URL from it.
         """
-        # Normalize empty strings to None
-        if self.access_key is not None and not self.access_key.strip():
-            self.access_key = None
-        if self.secret_key is not None and not self.secret_key.strip():
-            self.secret_key = None
-        if self.region is not None and not self.region.strip():
-            self.region = None
+        # Normalize optional strings by stripping surrounding whitespace and
+        # converting empty strings to None.
+        if self.access_key is not None:
+            self.access_key = self.access_key.strip() or None
+        if self.secret_key is not None:
+            self.secret_key = self.secret_key.strip() or None
+        if self.region is not None:
+            self.region = self.region.strip() or None
 
         if not self.bucket or not self.bucket.strip():
             raise ValueError("Missing required S3 setting: S3_BUCKET")
