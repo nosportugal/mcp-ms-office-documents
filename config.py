@@ -67,7 +67,7 @@ class S3Settings(BaseModel):
        ``AWS_SECRET_ACCESS_KEY`` environment variables. Can be used for local
        development or non-AWS environments. ``AWS_REGION`` is also required
        when using explicit credentials.
-    2. **AWS default credential chain ** — When
+    2. **AWS default credential chain** — When
        the explicit credential env vars are *NOT* set, the boto3 SDK
        automatically discovers credentials from (in order):
        - Environment variables (``AWS_ACCESS_KEY_ID``, ``AWS_SECRET_ACCESS_KEY``,
