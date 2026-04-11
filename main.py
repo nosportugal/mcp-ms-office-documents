@@ -277,7 +277,7 @@ async def create_xml_document(
 
     try:
         result = create_xml_file(xml_content)
-        logger.info(f"XML file created successfully.")
+        logger.info("XML file created successfully.")
         return result
     except Exception as e:
         logger.error(f"Error creating XML file: {e}", exc_info=True)

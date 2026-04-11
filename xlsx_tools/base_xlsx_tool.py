@@ -1,7 +1,7 @@
 import io
 import logging
 import re
-from typing import List, Dict, Tuple
+from typing import List, Dict
 from openpyxl import Workbook
 
 from upload_tools import upload_file
