@@ -212,7 +212,7 @@ def _replace_placeholder_in_paragraph(
 
         # Add text before placeholder (plain text, preserve any formatting would be complex)
         if text_before:
-            run = paragraph.add_run(text_before)
+            paragraph.add_run(text_before)
 
         if has_block_content and doc is not None:
             # Insert block content after this paragraph
