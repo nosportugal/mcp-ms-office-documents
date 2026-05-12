@@ -1,7 +1,10 @@
+import asyncio
+import functools
+from typing import Annotated, Callable, List, Dict, Optional, Literal, TypeVar
+
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from pydantic import BaseModel, Field
-from typing import Annotated, List, Dict, Optional, Literal
 from xlsx_tools import markdown_to_excel
 from docx_tools import markdown_to_word
 from docx_tools.dynamic_docx_tools import register_docx_template_tools_from_yaml
@@ -17,6 +20,68 @@ from starlette.responses import PlainTextResponse
 
 import logging
 mcp = FastMCP("MCP Office Documents")
+
+
+# ---------------------------------------------------------------------------
+# Async-safe wrapper for blocking document-generation calls
+# ---------------------------------------------------------------------------
+# Every Office-document generator in this project (markdown_to_word,
+# markdown_to_excel, create_presentation, create_eml, create_xml_file) is a
+# synchronous, blocking function. They perform:
+#
+#   * file I/O (opening .docx / .pptx templates, which are zip archives)
+#   * CPU-bound markdown parsing
+#   * synchronous network I/O (requests.get for image downloads, boto3
+#     S3 uploads)
+#
+# FastMCP runs on top of an asyncio event loop (uvicorn / Starlette).
+# Calling a blocking function directly from an `async def` tool handler
+# freezes the loop for the full duration of the call — no other request
+# can be served while the loop is blocked, including the Kubernetes
+# liveness / readiness probes at /healthl, /healthr, /healths. Repeated
+# probe timeouts cause kubelet to SIGTERM the pod, which is the failure
+# mode we observed in EKS:
+#
+#     ERROR: ASGI callable returned without completing response.
+#     ERROR: Cancel 0 running task(s), timeout graceful shutdown exceeded
+#
+# (The "0 running tasks" line is the giveaway: there were no async tasks
+# because the work was running synchronously on the event loop itself.)
+#
+# To keep the loop responsive, all blocking work is dispatched to the
+# default asyncio thread pool via `asyncio.to_thread`. The wrapper
+# preserves the original function's call signature exactly — no behavioral
+# change to any tool's logic.
+# ---------------------------------------------------------------------------
+
+T = TypeVar("T")
+
+
+async def run_blocking(func: Callable[..., T], /, *args, **kwargs) -> T:
+    """Run a synchronous callable on a worker thread.
+
+    Use this from any `async def` MCP tool handler that calls into a
+    blocking document-generation function. The synchronous function runs
+    on asyncio's default thread pool while the event loop stays free to
+    serve health probes, pings, and concurrent requests.
+
+    Args:
+        func: The blocking function to execute.
+        *args: Positional arguments forwarded to ``func``.
+        **kwargs: Keyword arguments forwarded to ``func``.
+
+    Returns:
+        Whatever ``func`` returns, awaited from the thread.
+
+    Raises:
+        Any exception ``func`` raises is re-raised in the calling
+        coroutine after being marshalled back from the worker thread.
+    """
+    # functools.partial binds kwargs cleanly; asyncio.to_thread accepts
+    # *args/**kwargs directly, but going through partial keeps the call
+    # site readable and makes the closure easy to log if needed.
+    bound = functools.partial(func, *args, **kwargs)
+    return await asyncio.to_thread(bound)
 
 # Initialize config and logging
 config = get_config()
@@ -45,28 +110,28 @@ else:
 #   the application, catching "alive port, dead process" failures.
 #
 # Probes (see k8s deployment manifest):
-#   /healths — startupProbe   (pod has started)
-#   /healthr — readinessProbe (pod is ready to receive traffic)
-#   /healthl — livenessProbe  (pod is alive; restart on failure)
+#   /healthz — startupProbe   (pod has started)
+#   /readyz — readinessProbe (pod is ready to receive traffic)
+#   /livez — livenessProbe  (pod is alive; restart on failure)
 #
 # Each endpoint returns 200 OK with a short plain-text body. If the server
 # event loop is wedged, the request will time out and kubelet will mark
 # the probe as failed.
 # ---------------------------------------------------------------------------
 
-@mcp.custom_route("/healths", methods=["GET"])
+@mcp.custom_route("/healthz", methods=["GET"])
 async def health_startup(request: Request) -> PlainTextResponse:
     """Startup probe — returns 200 OK once the HTTP server is accepting requests."""
     return PlainTextResponse("ok", status_code=200)
 
 
-@mcp.custom_route("/healthr", methods=["GET"])
+@mcp.custom_route("/readyz", methods=["GET"])
 async def health_ready(request: Request) -> PlainTextResponse:
     """Readiness probe — returns 200 OK when the server can serve traffic."""
     return PlainTextResponse("ready", status_code=200)
 
 
-@mcp.custom_route("/healthl", methods=["GET"])
+@mcp.custom_route("/livez", methods=["GET"])
 async def health_live(request: Request) -> PlainTextResponse:
     """Liveness probe — returns 200 OK while the event loop is responsive."""
     return PlainTextResponse("alive", status_code=200)
@@ -150,7 +215,7 @@ async def create_excel_document(
     logger.info("Converting markdown to Excel document")
 
     try:
-        result = markdown_to_excel(markdown_content)
+        result = await run_blocking(markdown_to_excel, markdown_content)
         logger.info("Excel document uploaded successfully")
         return result
     except Exception as e:
@@ -213,7 +278,8 @@ async def create_word_document(
     logger.info("Converting markdown to Word document")
 
     try:
-        result = markdown_to_word(
+        result = await run_blocking(
+            markdown_to_word,
             markdown_content,
             title=title,
             author=author,
@@ -259,7 +325,7 @@ All slides support optional 'speaker_notes': str field."""
     logger.info(f"Creating PowerPoint presentation with {len(slides)} slides in {format} format")
 
     try:
-        result = create_presentation(slides, format)
+        result = await run_blocking(create_presentation, slides, format)
         logger.info(f"PowerPoint presentation created: {result}")
         return result
     except Exception as e:
@@ -288,14 +354,15 @@ async def create_email_draft(
     logger.info(f"Creating email draft with subject: {subject}")
 
     try:
-        result = create_eml(
+        result = await run_blocking(
+            create_eml,
             to=to,
             cc=cc,
             bcc=bcc,
             re=subject,
             content=content,
             priority=priority,
-            language=language
+            language=language,
         )
         logger.info(f"Email draft created: {result}")
         return result
@@ -320,7 +387,7 @@ async def create_xml_document(
     logger.info("Creating XML file")
 
     try:
-        result = create_xml_file(xml_content)
+        result = await run_blocking(create_xml_file, xml_content)
         logger.info(f"XML file created successfully.")
         return result
     except Exception as e:
