@@ -106,6 +106,14 @@ _INLINE_FORMAT_RE = re.compile(
     r'|\[[^\]]*\]\([^)]*\))'             # [link](url)
 )
 
+# Pre-compiled inline patterns used inside the formatting hot path. The
+# previous implementations called ``re.match(...)`` / ``re.sub(...)`` with
+# string literals on every invocation — each call paying the regex-cache
+# lookup. Hoisting the compilation to module scope keeps the loops tight
+# without altering match behaviour.
+_LINK_RE = re.compile(r'\[(.*?)]\((.*?)\)')        # [link text](url)
+_ESCAPE_RE = re.compile(r'\\(.)')                   # backslash-escaped character
+
 
 def _parse_formatting_segment(text, paragraph, bold=False, italic=False, escape_ctx=None):
     """Parse a single text segment for inline markdown formatting."""
@@ -131,7 +139,7 @@ def _parse_formatting_segment(text, paragraph, bold=False, italic=False, escape_
             run.font.name = 'Courier New'
             _apply_formatting(run, bold, italic)
         elif part.startswith('[') and '](' in part and part.endswith(')'):
-            link_match = re.match(r'\[(.*?)]\((.*?)\)', part)
+            link_match = _LINK_RE.match(part)
             if link_match:
                 link_text = _restore_escapes(link_match.group(1), escape_ctx)
                 link_url = _restore_escapes(link_match.group(2), escape_ctx)
@@ -154,7 +162,7 @@ def _handle_escapes(text, escape_ctx):
         escape_ctx["counter"] += 1
         return placeholder
 
-    return re.sub(r'\\(.)', _replace, text)
+    return _ESCAPE_RE.sub(_replace, text)
 
 
 def _restore_escapes(text, escape_ctx):
@@ -258,20 +266,34 @@ def process_list_items(lines, start_idx, doc, is_ordered=False, level=0,
     elements = [] if return_elements else None
     i = start_idx
 
-    while i < len(lines):
-        line = lines[i].strip()
+    # Cache len() once — `lines` is never mutated inside this function or
+    # its recursive call, so the bound is stable. Avoids a function call
+    # per loop iteration across two nested loops.
+    n = len(lines)
 
+    # Choose the capture-variant regex once per call rather than re-checking
+    # `is_ordered` on every iteration. Both patterns capture the list item
+    # text in group(1).
+    list_capture_pattern = (
+        ORDERED_LIST_CAPTURE_PATTERN if is_ordered else UNORDERED_LIST_CAPTURE_PATTERN
+    )
+
+    while i < n:
+        # Compute the leading-whitespace length and the stripped line in a
+        # single lstrip() pass. The original code did `lines[i].strip()`
+        # plus an independent `lines[i].lstrip()` — walking the leading
+        # whitespace twice. ``stripped_left.rstrip()`` is equivalent to
+        # ``lines[i].strip()`` (both lstrip and rstrip applied).
         original_line = lines[i]
-        indent = len(original_line) - len(original_line.lstrip())
+        stripped_left = original_line.lstrip()
+        indent = len(original_line) - len(stripped_left)
+        line = stripped_left.rstrip()
         current_level = indent // 3
 
         if current_level != level:
             break
 
-        if is_ordered:
-            list_match = re.match(r'^\d+\.\s+(.+)', line)
-        else:
-            list_match = re.match(r'^[-*+]\s+(.+)', line)
+        list_match = list_capture_pattern.match(line)
 
         if not list_match:
             break
@@ -286,19 +308,20 @@ def process_list_items(lines, start_idx, doc, is_ordered=False, level=0,
         i += 1
 
         # Look ahead for nested items
-        while i < len(lines):
-            next_line = lines[i].strip()
+        while i < n:
+            next_original = lines[i]
+            next_stripped_left = next_original.lstrip()
+            next_line = next_stripped_left.rstrip()
             if not next_line:
                 i += 1
                 continue
 
-            next_original = lines[i]
-            next_indent = len(next_original) - len(next_original.lstrip())
+            next_indent = len(next_original) - len(next_stripped_left)
             next_level = next_indent // 3
 
             if next_level > level:
-                is_nested_ordered = bool(re.match(r'^\d+\.\s+', next_line))
-                is_nested_unordered = bool(re.match(r'^[-*+]\s+', next_line))
+                is_nested_ordered = bool(ORDERED_LIST_PATTERN.match(next_line))
+                is_nested_unordered = bool(UNORDERED_LIST_PATTERN.match(next_line))
                 if is_nested_ordered or is_nested_unordered:
                     i, nested = process_list_items(
                         lines, i, doc, is_nested_ordered, next_level, return_elements
@@ -319,6 +342,12 @@ def process_list_items(lines, start_idx, doc, is_ordered=False, level=0,
 
 ORDERED_LIST_PATTERN = re.compile(r'^\d+\.\s+')
 UNORDERED_LIST_PATTERN = re.compile(r'^[-*+]\s+')
+# Capture variants used by process_list_items() to extract the item text.
+# Kept separate from the block-detection patterns above (which are used by
+# contains_block_markdown / _BLOCK_PATTERNS for fast "is this a list line?"
+# checks and have no capture group).
+ORDERED_LIST_CAPTURE_PATTERN = re.compile(r'^\d+\.\s+(.+)')
+UNORDERED_LIST_CAPTURE_PATTERN = re.compile(r'^[-*+]\s+(.+)')
 HEADING_PATTERN = re.compile(r'^(#{1,6})\s+(.+)$')
 PAGE_BREAK_PATTERN = re.compile(r'^-{3,}\s*$')
 HORIZONTAL_LINE_PATTERN = re.compile(r'^\*{3,}\s*$')

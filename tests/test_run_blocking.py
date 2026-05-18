@@ -24,6 +24,7 @@ import asyncio
 import importlib
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -39,28 +40,30 @@ sys.path.insert(0, str(project_root))
 # Test helpers
 # ---------------------------------------------------------------------------
 
-def _reload_main_with_flag(flag_value: str):
-    """Re-import main.py with RUN_BLOCKING_BY_ASYNCIO_THREAD_ENABLED set to *flag_value*.
+def _reload_main_with_flag(flag_value: str, max_workers: str | None = None):
+    """Re-import main.py with the run_blocking env vars set.
 
-    The Config singleton is reset before reload so the new env var is read.
-    Also clears any module that caches references to the config singleton
-    (``async_runner`` imports ``get_config`` at module load), so the freshly
-    reloaded config is the one that ``run_blocking`` consults.
+    Args:
+        flag_value: Value for ``RUN_BLOCKING_BY_ASYNCIO_THREAD_ENABLED``.
+        max_workers: Optional value for ``RUN_BLOCKING_MAX_WORKERS``. When
+            ``None``, the env var is set to ``""`` so the parser falls
+            back to the documented default (4). Setting it explicitly
+            (including the empty string) rather than popping prevents
+            ``load_dotenv()`` from re-applying a developer's local
+            ``.env`` value on each ``config`` reimport.
 
-    Setting an explicit value (including the empty string) rather than
-    popping the env var prevents ``load_dotenv()`` — which runs on each
-    ``config`` reimport — from re-applying a developer's local ``.env``
-    value.
+    Modules reloaded together so that:
+      - config re-reads the environment,
+      - async_runner re-binds get_config and recreates the bounded
+        ThreadPoolExecutor with the freshly loaded max_workers,
+      - main re-binds run_blocking to the new async_runner module.
 
     Returns the freshly imported main module.
     """
     os.environ["RUN_BLOCKING_BY_ASYNCIO_THREAD_ENABLED"] = flag_value
+    os.environ["RUN_BLOCKING_MAX_WORKERS"] = "" if max_workers is None else max_workers
     os.environ.setdefault("UPLOAD_STRATEGY", "LOCAL")
 
-    # Modules that must be reloaded together so that:
-    #   - config re-reads the environment,
-    #   - async_runner re-binds get_config to the new config module,
-    #   - main re-binds run_blocking to the new async_runner module.
     for mod_name in ("main", "async_runner", "config"):
         sys.modules.pop(mod_name, None)
 
@@ -89,21 +92,26 @@ def _raising_sync():
 class TestRunBlockingFlagPlumbing:
     """Verify the RUN_BLOCKING_BY_ASYNCIO_THREAD_ENABLED env var maps to config correctly."""
 
-    def test_flag_default_is_false(self):
-        # Setting to empty string is equivalent to "unset" for our parser
-        # (_parse_bool returns False) AND prevents load_dotenv() from
-        # overriding it on re-import if the developer's local .env happens
-        # to set the flag to a truthy value.
-        main = _reload_main_with_flag("")
-        assert main.config.run_blocking_by_asyncio_thread_enabled is False
+    @pytest.mark.parametrize("unset_marker", ["", "  "])
+    def test_flag_default_is_true_when_unset(self, unset_marker):
+        """Empty / whitespace env value is treated as 'unset' → default True.
+
+        Setting an explicit value (even empty) rather than popping the var
+        prevents ``load_dotenv()`` from re-applying a developer's local
+        ``.env`` value on each ``config`` reimport.
+        """
+        main = _reload_main_with_flag(unset_marker)
+        assert main.config.run_blocking_by_asyncio_thread_enabled is True
 
     @pytest.mark.parametrize("truthy", ["1", "true", "TRUE", "yes", "on", "y"])
     def test_flag_truthy_values(self, truthy):
         main = _reload_main_with_flag(truthy)
         assert main.config.run_blocking_by_asyncio_thread_enabled is True
 
-    @pytest.mark.parametrize("falsy", ["0", "false", "", "no", "off", "  "])
-    def test_flag_falsy_values(self, falsy):
+    @pytest.mark.parametrize("falsy", ["0", "false", "no", "off"])
+    def test_flag_explicit_falsy_values(self, falsy):
+        """Only explicit falsy strings disable the offload (empty / whitespace
+        falls back to the True default — see test_flag_default_is_true_when_unset)."""
         main = _reload_main_with_flag(falsy)
         assert main.config.run_blocking_by_asyncio_thread_enabled is False
 
@@ -291,3 +299,130 @@ class TestDynamicToolsUseRunBlocking:
         assert inspect.iscoroutinefunction(docx_rb)
         assert inspect.iscoroutinefunction(email_rb)
         assert main.config.run_blocking_by_asyncio_thread_enabled is expected_mode
+
+
+# ---------------------------------------------------------------------------
+# Bounded executor — config + behavioural tests
+# ---------------------------------------------------------------------------
+
+class TestBoundedExecutorConfig:
+    """Verify RUN_BLOCKING_MAX_WORKERS maps to config and to the executor."""
+
+    def test_default_is_4(self):
+        """No env var set → config default of 4 is used."""
+        main = _reload_main_with_flag("true", max_workers="")
+        assert main.config.run_blocking_max_workers == 4
+
+    @pytest.mark.parametrize("n", [1, 2, 3, 8, 16])
+    def test_env_override_accepted(self, n):
+        """Valid positive integer env values are honoured."""
+        main = _reload_main_with_flag("true", max_workers=str(n))
+        assert main.config.run_blocking_max_workers == n
+
+    @pytest.mark.parametrize("bogus", ["0", "-3", "not-an-int", "  "])
+    def test_invalid_env_falls_back_to_default(self, bogus):
+        """Invalid / non-positive values silently fall back to default 4."""
+        main = _reload_main_with_flag("true", max_workers=bogus)
+        assert main.config.run_blocking_max_workers == 4
+
+
+class TestBoundedExecutorBehavior:
+    """Verify the executor is bounded and the GIL pile-up is prevented."""
+
+    def test_executor_is_created_lazily_and_has_config_size(self):
+        """First call must create a ThreadPoolExecutor sized from config."""
+        _reload_main_with_flag("true", max_workers="3")
+        from async_runner import _get_executor
+
+        ex = _get_executor()
+        # ThreadPoolExecutor exposes max_workers as a public attribute.
+        assert ex._max_workers == 3
+        # And subsequent calls must return the same instance (singleton).
+        assert _get_executor() is ex
+
+    def test_executor_uses_named_threads(self):
+        """Worker threads carry the documented prefix — useful in py-spy dumps."""
+        _reload_main_with_flag("true", max_workers="2")
+        from async_runner import _get_executor
+
+        captured: list[str] = []
+
+        def record_thread_name():
+            captured.append(threading.current_thread().name)
+
+        ex = _get_executor()
+        fut = ex.submit(record_thread_name)
+        fut.result(timeout=5)
+
+        assert captured, "task did not run"
+        assert captured[0].startswith("run_blocking"), (
+            f"thread name {captured[0]!r} should start with 'run_blocking' so "
+            f"py-spy / logs make the bounded pool obvious"
+        )
+
+    def test_concurrent_runs_are_capped_at_max_workers(self):
+        """With max_workers=2, never more than 2 tasks execute simultaneously.
+
+        This is the core safety property: more than max_workers concurrent
+        offloaded calls must QUEUE in the executor, not start spawning
+        unbounded threads that all compete for the GIL.
+        """
+        _reload_main_with_flag("true", max_workers="2")
+        from async_runner import run_blocking
+
+        # We submit 8 tasks that each "hold a slot" for a short window.
+        # A shared counter records how many are concurrently active; the
+        # peak must equal max_workers (2), never exceed it.
+        active = 0
+        peak = 0
+        lock = threading.Lock()
+        barrier_release = threading.Event()
+
+        def slot_holder():
+            nonlocal active, peak
+            with lock:
+                active += 1
+                if active > peak:
+                    peak = active
+            # Hold the slot briefly so the scheduler has a real chance to
+            # pile more in if the bound is broken.
+            time.sleep(0.05)
+            with lock:
+                active -= 1
+            return True
+
+        async def run_many():
+            await asyncio.gather(*[run_blocking(slot_holder) for _ in range(8)])
+
+        asyncio.run(run_many())
+
+        assert peak == 2, (
+            f"peak concurrent workers was {peak}, expected exactly 2 "
+            f"(max_workers). Bound is broken — GIL pile-up will recur."
+        )
+
+    def test_inline_mode_does_not_use_executor(self):
+        """When the thread-offload flag is disabled, no executor work happens."""
+        _reload_main_with_flag("false", max_workers="2")
+        from async_runner import run_blocking
+
+        # Capture which thread the function runs on. In inline mode it
+        # must be the asyncio loop thread (i.e. NOT a 'run_blocking_*'
+        # worker thread).
+        observed: list[str] = []
+
+        def record_thread():
+            observed.append(threading.current_thread().name)
+            return 42
+
+        async def go():
+            result = await run_blocking(record_thread)
+            assert result == 42
+
+        asyncio.run(go())
+
+        assert observed, "function did not run"
+        assert not observed[0].startswith("run_blocking"), (
+            f"inline mode must not touch the bounded executor; saw thread "
+            f"{observed[0]!r}"
+        )
