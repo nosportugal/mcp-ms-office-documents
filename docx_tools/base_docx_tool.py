@@ -6,18 +6,7 @@ from upload_tools import upload_file
 from .helpers import (
     load_templates,
     parse_inline_formatting,
-    parse_table,
-    add_table_to_doc,
-    process_list_items,
-    add_horizontal_line,
-    add_image_to_doc,
-    IMAGE_PATTERN,
-    ORDERED_LIST_PATTERN,
-    PAGE_BREAK_PATTERN,
-    HORIZONTAL_LINE_PATTERN,
-    UNORDERED_LIST_PATTERN,
-    detect_alignment,
-    process_alignment_block,
+    process_markdown_block,
     set_header_footer,
     add_toc,
 )
@@ -25,10 +14,17 @@ from .helpers import (
 logger = logging.getLogger(__name__)
 
 
-def markdown_to_word(markdown_content, title=None, author=None, subject=None,
-                     header_text=None, footer_text=None, include_toc=False, file_name=None):
-    """Convert Markdown to Word document."""
-    logger.info("Starting markdown_to_word conversion")
+def _markdown_to_doc(markdown_content, title=None, author=None, subject=None,
+                     header_text=None, footer_text=None, include_toc=False):
+    """Convert Markdown content to a python-docx Document object.
+
+    This is the core conversion logic, separated from upload concerns so it
+    can be used directly in tests or other contexts that need the Document.
+
+    Returns:
+        A ``docx.Document`` instance with the rendered content.
+    """
+    logger.info("Starting markdown_to_doc conversion")
     path = load_templates()
 
     # Create document with or without template
@@ -61,59 +57,43 @@ def markdown_to_word(markdown_content, title=None, author=None, subject=None,
     if footer_text:
         set_header_footer(doc, footer_text, 'footer')
 
-    # Split content into lines, but preserve line breaks within paragraphs
+    # Parse markdown content into document
     lines = markdown_content.split('\n')
-    # Cache len(lines) once — the list is not mutated inside the parsing
-    # loop; this removes a function call per iteration in two nested loops.
     n = len(lines)
     i = 0
-
-    # Simple parsing counters for summary
-    headers_count = 0
-    tables_count = 0
-    ordered_lists = 0
-    unordered_lists = 0
-    quotes_count = 0
-    paragraphs_count = 0
+    blocks_count = 0
 
     try:
         while i < n:
             line = lines[i]
 
-            # Handle multiple empty lines (preserve spacing).
-            # The outer `if` already established that lines[i] is empty;
-            # initialise the counter to 1 and advance once before entering
-            # the inner loop so we don't re-strip the same line.
+            # --- Empty line handling (preserve spacing) ---
             if not line.strip():
                 empty_line_count = 1
                 i += 1
 
-                # Count consecutive empty lines that follow
                 while i < n and not lines[i].strip():
                     empty_line_count += 1
                     i += 1
 
-                # Add appropriate spacing based on number of empty lines
-                if empty_line_count == 1:
-                    pass
-                elif empty_line_count >= 2:
+                # Two or more consecutive empty lines → insert spacing paragraphs
+                if empty_line_count >= 2:
                     for _ in range(empty_line_count - 1):
                         doc.add_paragraph()
-                        paragraphs_count += 1
                 continue
 
-            # Check if this line ends with two spaces (line break)
+            # --- Soft line breaks (trailing two spaces) ---
+            # Markdown convention: a line ending with two spaces means a soft
+            # break within the same paragraph. Collect consecutive lines that
+            # are joined by this mechanism.
             if line.endswith('  '):
-                # Collect lines that are part of the same paragraph (connected by line breaks)
                 paragraph_lines = []
                 while i < n:
                     current_line = lines[i]
                     if not current_line.strip():
                         break
-
                     paragraph_lines.append(current_line)
                     i += 1
-
                     if not current_line.endswith('  '):
                         break
 
@@ -121,100 +101,46 @@ def markdown_to_word(markdown_content, title=None, author=None, subject=None,
                 first_line = paragraph_lines[0].strip()
 
                 if first_line.startswith('#'):
-                    # Compute lstrip once and reuse for both the level (count
-                    # of leading '#') and the header text.
                     stripped_hashes = first_line.lstrip('#')
-                    header_level = len(first_line) - len(stripped_hashes)
-                    header_text = stripped_hashes.strip()
-                    heading = doc.add_heading('', level=min(header_level, 6))
-                    parse_inline_formatting(header_text, heading)
-                    headers_count += 1
-                    logger.debug(f"Header (level {header_level}): {header_text}")
+                    level = len(first_line) - len(stripped_hashes)
+                    heading = doc.add_heading('', level=min(level, 6))
+                    parse_inline_formatting(stripped_hashes.strip(), heading)
                 elif first_line.startswith('>'):
                     quote_text = full_text[1:].strip()
                     quote_paragraph = doc.add_paragraph()
                     quote_paragraph.style = 'Quote'
                     parse_inline_formatting(quote_text, quote_paragraph)
-                    quotes_count += 1
                 else:
                     paragraph = doc.add_paragraph()
                     parse_inline_formatting(full_text, paragraph)
-                    paragraphs_count += 1
+
+                blocks_count += 1
                 continue
 
-            line = line.strip()
-
-            if line.startswith('#'):
-                # Compute lstrip once (see comment above).
-                stripped_hashes = line.lstrip('#')
-                header_level = len(line) - len(stripped_hashes)
-                header_text = stripped_hashes.strip()
-                heading = doc.add_heading('', level=min(header_level, 6))
-                parse_inline_formatting(header_text, heading)
-                headers_count += 1
-                logger.debug(f"Header (level {header_level}): {header_text}")
-                i += 1
-
-            elif line.startswith('|'):
-                table_data, i = parse_table(lines, i)
-                if table_data:
-                    add_table_to_doc(table_data, doc)
-                    tables_count += 1
-                    logger.debug(f"Added table with {len(table_data)} rows")
-
-            elif ORDERED_LIST_PATTERN.match(line):
-                i, _ = process_list_items(lines, i, doc, True, 0)
-                ordered_lists += 1
-
-            elif UNORDERED_LIST_PATTERN.match(line):
-                i, _ = process_list_items(lines, i, doc, False, 0)
-                unordered_lists += 1
-
-            elif PAGE_BREAK_PATTERN.match(line):
-                # Page break
-                doc.add_page_break()
-                i += 1
-
-            elif HORIZONTAL_LINE_PATTERN.match(line):
-                # Horizontal line
-                add_horizontal_line(doc)
-                paragraphs_count += 1
-                i += 1
-
-            elif (img_match := IMAGE_PATTERN.match(line)):
-                alt_text, url = img_match.groups()
-                add_image_to_doc(doc, url, alt_text)
-                paragraphs_count += 1
-                i += 1
-
-            elif (align_result := detect_alignment(line)) is not None:
-                inner, alignment = align_result
-                if inner is not None:
-                    paragraph = doc.add_paragraph()
-                    paragraph.alignment = alignment
-                    parse_inline_formatting(inner, paragraph)
-                    paragraphs_count += 1
-                    i += 1
-                else:
-                    i, _ = process_alignment_block(lines, i + 1, doc, alignment, return_elements=False)
-
-            elif line.startswith('>'):
-                quote_text = line[1:].strip()
-                quote_paragraph = doc.add_paragraph()
-                quote_paragraph.style = 'Quote'
-                parse_inline_formatting(quote_text, quote_paragraph)
-                quotes_count += 1
-                i += 1
-
-            else:
-                paragraph = doc.add_paragraph()
-                parse_inline_formatting(line, paragraph)
-                paragraphs_count += 1
-                i += 1
+            # --- All other block elements: delegate to shared processor ---
+            i, _ = process_markdown_block(doc, lines, i, return_element=False)
+            blocks_count += 1
 
     except Exception as e:
         logger.error(f"Error in parsing markdown: {e}", exc_info=True)
         raise RuntimeError(f"Error in parsing markdown: {e}") from e
+
+    logger.info(f"Markdown parsing completed ({blocks_count} blocks processed)")
+    return doc
+
+
+def markdown_to_word(markdown_content, title=None, author=None, subject=None,
+                     header_text=None, footer_text=None, include_toc=False, file_name=None):
+    """Convert Markdown to Word document, save to memory and upload."""
+    doc = _markdown_to_doc(
+        markdown_content,
+        title=title,
+        author=author,
+        subject=subject,
+        header_text=header_text,
+        footer_text=footer_text,
+        include_toc=include_toc,
+    )
 
     # Save the document to BytesIO and upload
     try:
@@ -226,10 +152,7 @@ def markdown_to_word(markdown_content, title=None, author=None, subject=None,
         result = upload_file(file_object, "docx", filename=file_name)
         file_object.close()
 
-        logger.info(
-            f"Word upload completed (headers={headers_count}, tables={tables_count}, ordered_lists={ordered_lists}, "
-            f"unordered_lists={unordered_lists}, quotes={quotes_count}, paragraphs={paragraphs_count})"
-        )
+        logger.info("Word document uploaded successfully")
         return result
     except Exception as e:
         logger.error(f"Error saving/uploading Word document: {e}", exc_info=True)

@@ -758,6 +758,15 @@ def process_markdown_block(doc, lines, start_idx, return_element=True):
                 lines, start_idx, doc, is_ordered=False, level=0, return_elements=return_element
             )
 
+        # Blockquote (> text)
+        if stripped.startswith('>'):
+            quote_text = stripped[1:].strip()
+            quote_para = doc.add_paragraph()
+            quote_para.style = 'Quote'
+            parse_inline_formatting(quote_text, quote_para)
+            _collect(quote_para._p)
+            return start_idx + 1, elements
+
         # Regular paragraph
         para = doc.add_paragraph()
         parse_inline_formatting(stripped, para)

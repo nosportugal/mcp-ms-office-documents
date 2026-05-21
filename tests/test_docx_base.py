@@ -17,23 +17,8 @@ import pytest
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 
-from docx_tools.helpers import (
-    parse_inline_formatting,
-    load_templates,
-    parse_table,
-    add_table_to_doc,
-    process_list_items,
-    add_horizontal_line,
-    add_image_to_doc,
-    IMAGE_PATTERN,
-    PAGE_BREAK_PATTERN,
-    HORIZONTAL_LINE_PATTERN,
-    detect_alignment,
-    process_alignment_block,
-    set_header_footer,
-    add_toc,
-)
-import re
+from docx_tools.base_docx_tool import _markdown_to_doc
+from docx_tools.helpers import parse_inline_formatting
 
 # Output directory for test files
 OUTPUT_DIR = Path(__file__).parent / "output" / "docx"
@@ -51,130 +36,18 @@ def create_word_document(markdown_content: str, title=None, author=None,
                          include_toc=False) -> Document:
     """Convert Markdown to Word document and return the Document object.
 
-    This is a test-friendly version that returns the Document directly
-    instead of saving via upload_file.
+    Delegates to the production _markdown_to_doc function so tests exercise
+    the real code path rather than a divergent copy.
     """
-    path = load_templates()
-
-    if path:
-        doc = Document(path)
-    else:
-        doc = Document()
-
-    # Set document metadata
-    if title:
-        doc.core_properties.title = title
-    if author:
-        doc.core_properties.author = author
-    if subject:
-        doc.core_properties.subject = subject
-
-    # Insert TOC
-    if include_toc:
-        add_toc(doc)
-
-    # Set header and footer
-    if header_text:
-        set_header_footer(doc, header_text, 'header')
-    if footer_text:
-        set_header_footer(doc, footer_text, 'footer')
-
-    lines = markdown_content.split('\n')
-    i = 0
-
-    while i < len(lines):
-        line = lines[i]
-
-        if not line.strip():
-            i += 1
-            continue
-
-        # Check if this line ends with two spaces (line break)
-        if line.endswith('  '):
-            paragraph_lines = []
-            while i < len(lines):
-                current_line = lines[i]
-                if not current_line.strip():
-                    break
-                paragraph_lines.append(current_line)
-                i += 1
-                if not current_line.endswith('  '):
-                    break
-
-            full_text = '  \n'.join(paragraph_lines)
-            first_line = paragraph_lines[0].strip()
-
-            if first_line.startswith('#'):
-                header_level = len(first_line) - len(first_line.lstrip('#'))
-                header_text_val = first_line.lstrip('#').strip()
-                heading = doc.add_heading('', level=min(header_level, 6))
-                parse_inline_formatting(header_text_val, heading)
-            elif first_line.startswith('>'):
-                quote_text = full_text[1:].strip()
-                quote_paragraph = doc.add_paragraph()
-                quote_paragraph.style = 'Quote'
-                parse_inline_formatting(quote_text, quote_paragraph)
-            else:
-                paragraph = doc.add_paragraph()
-                parse_inline_formatting(full_text, paragraph)
-            continue
-
-        line = line.strip()
-
-        if line.startswith('#'):
-            header_level = len(line) - len(line.lstrip('#'))
-            header_text_val = line.lstrip('#').strip()
-            heading = doc.add_heading('', level=min(header_level, 6))
-            parse_inline_formatting(header_text_val, heading)
-            i += 1
-
-        elif line.startswith('|'):
-            table_data, i = parse_table(lines, i)
-            if table_data:
-                add_table_to_doc(table_data, doc)
-
-        elif re.match(r'^\d+\.\s+', line):
-            i, _ = process_list_items(lines, i, doc, True, 0)
-
-        elif re.match(r'^[-*+]\s+', line):
-            i, _ = process_list_items(lines, i, doc, False, 0)
-
-        elif PAGE_BREAK_PATTERN.match(line):
-            doc.add_page_break()
-            i += 1
-
-        elif HORIZONTAL_LINE_PATTERN.match(line):
-            add_horizontal_line(doc)
-            i += 1
-
-        elif (img_match := IMAGE_PATTERN.match(line)):
-            alt_text, url = img_match.groups()
-            add_image_to_doc(doc, url, alt_text)
-            i += 1
-
-        elif (align_result := detect_alignment(line)) is not None:
-            inner, alignment = align_result
-            if inner is not None:
-                paragraph = doc.add_paragraph()
-                paragraph.alignment = alignment
-                parse_inline_formatting(inner, paragraph)
-                i += 1
-            else:
-                i, _ = process_alignment_block(lines, i + 1, doc, alignment, return_elements=False)
-
-        elif line.startswith('>'):
-            quote_text = line[1:].strip()
-            quote_paragraph = doc.add_paragraph()
-            quote_paragraph.style = 'Quote'
-            parse_inline_formatting(quote_text, quote_paragraph)
-            i += 1
-
-        else:
-            paragraph = doc.add_paragraph()
-            parse_inline_formatting(line, paragraph)
-            i += 1
-
-    return doc
+    return _markdown_to_doc(
+        markdown_content,
+        title=title,
+        author=author,
+        subject=subject,
+        header_text=header_text,
+        footer_text=footer_text,
+        include_toc=include_toc,
+    )
 
 
 def save_test_document(markdown: str, filename: str) -> Document:
