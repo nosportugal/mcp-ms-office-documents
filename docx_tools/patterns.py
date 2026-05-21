@@ -36,9 +36,12 @@ _INLINE_FORMAT_RE = re.compile(
     r'(\*{3}(?:[^*]|\*(?!\*{2}))+\*{3}'  # ***bold italic***
     r'|\*\*(?:[^*]|\*(?!\*))+\*\*'       # **bold**
     r'|~~.+?~~'                           # ~~strikethrough~~
+    r'|==.+?=='                           # ==highlight==
     r'|__(?!_).+?__'                      # __underline__
     r'|\*(?:[^*]|\*\*[^*]+\*\*)+\*'       # *italic* (allows nested **bold**)
     r'|`[^`]+`'                           # `code`
+    r'|\^[^^]+\^'                         # ^superscript^
+    r'|~(?!~)[^~]+~'                      # ~subscript~ (single tilde, not ~~)
     r'|\[[^\]]*\]\([^)]*\))'             # [link](url)
 )
 

@@ -123,6 +123,11 @@ def _parse_formatting_segment(text, paragraph, bold=False, italic=False, escape_
             run = paragraph.add_run(_restore_escapes(part[2:-2], escape_ctx))
             run.font.strike = True
             _apply_formatting(run, bold, italic)
+        elif part.startswith('==') and part.endswith('==') and len(part) > 4:
+            from docx.enum.text import WD_COLOR_INDEX
+            run = paragraph.add_run(_restore_escapes(part[2:-2], escape_ctx))
+            run.font.highlight_color = WD_COLOR_INDEX.YELLOW
+            _apply_formatting(run, bold, italic)
         elif part.startswith('__') and part.endswith('__') and not part.startswith('___'):
             run = paragraph.add_run(_restore_escapes(part[2:-2], escape_ctx))
             run.font.underline = True
@@ -132,6 +137,14 @@ def _parse_formatting_segment(text, paragraph, bold=False, italic=False, escape_
         elif part.startswith('`') and part.endswith('`'):
             run = paragraph.add_run(_restore_escapes(part[1:-1], escape_ctx))
             run.font.name = 'Courier New'
+            _apply_formatting(run, bold, italic)
+        elif part.startswith('^') and part.endswith('^') and len(part) > 2:
+            run = paragraph.add_run(_restore_escapes(part[1:-1], escape_ctx))
+            run.font.superscript = True
+            _apply_formatting(run, bold, italic)
+        elif part.startswith('~') and part.endswith('~') and not part.startswith('~~') and len(part) > 2:
+            run = paragraph.add_run(_restore_escapes(part[1:-1], escape_ctx))
+            run.font.subscript = True
             _apply_formatting(run, bold, italic)
         elif part.startswith('[') and '](' in part and part.endswith(')'):
             link_match = _LINK_RE.match(part)

@@ -212,6 +212,8 @@ async def create_word_document(
         "- **bold**, *italic*, ***bold italic***\n"
         "- ~~strikethrough~~, __underline__ (double underscore — NOT bold)\n"
         "- `code` (Courier New font)\n"
+        "- ^superscript^ (e.g. x^2^), ~subscript~ (e.g. H~2~O)\n"
+        "- ==highlighted text== (yellow background)\n"
         "- [link text](https://url)\n"
         "- Nesting: **bold with *italic* inside**, *italic with **bold** inside*\n"
         "- Combinations: **~~bold strikethrough~~**, **__bold underline__**, *~~italic strikethrough~~*\n"

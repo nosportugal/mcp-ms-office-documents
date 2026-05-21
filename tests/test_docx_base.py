@@ -1771,4 +1771,48 @@ class TestUnderlineStrikethrough:
         doc = save_test_document(markdown, "format_underline.docx")
         assert doc is not None
 
+    def test_superscript(self):
+        """Test superscript formatting with ^text^."""
+        markdown = "E = mc^2^ is famous."
+        doc = save_test_document(markdown, "format_superscript.docx")
+        assert doc is not None
+        para = doc.paragraphs[-1]
+        runs = para.runs
+        # Find the superscript run
+        super_run = next(r for r in runs if r.text == '2')
+        assert super_run.font.superscript is True
+
+    def test_subscript(self):
+        """Test subscript formatting with ~text~."""
+        markdown = "Water is H~2~O."
+        doc = save_test_document(markdown, "format_subscript.docx")
+        assert doc is not None
+        para = doc.paragraphs[-1]
+        runs = para.runs
+        sub_run = next(r for r in runs if r.text == '2')
+        assert sub_run.font.subscript is True
+
+    def test_highlight(self):
+        """Test highlight formatting with ==text==."""
+        from docx.enum.text import WD_COLOR_INDEX
+        markdown = "This is ==very important== text."
+        doc = save_test_document(markdown, "format_highlight.docx")
+        assert doc is not None
+        para = doc.paragraphs[-1]
+        runs = para.runs
+        hl_run = next(r for r in runs if r.text == 'very important')
+        assert hl_run.font.highlight_color == WD_COLOR_INDEX.YELLOW
+
+    def test_superscript_subscript_combined(self):
+        """Test super and subscript in the same paragraph."""
+        markdown = "x^2^ + y~i~ = z"
+        doc = save_test_document(markdown, "format_super_sub_combined.docx")
+        assert doc is not None
+        para = doc.paragraphs[-1]
+        runs = para.runs
+        super_run = next(r for r in runs if r.text == '2')
+        sub_run = next(r for r in runs if r.text == 'i')
+        assert super_run.font.superscript is True
+        assert sub_run.font.subscript is True
+
 
