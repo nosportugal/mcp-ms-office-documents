@@ -6,6 +6,7 @@ functions for template loading and data parsing.
 """
 
 import logging
+import re
 from typing import List, Tuple, Optional, Any
 
 from pptx.enum.text import PP_ALIGN
@@ -29,12 +30,16 @@ logger = logging.getLogger(__name__)
 # Utility Functions
 # =============================================================================
 
+# Regex matching a single markdown table separator cell: optional colon, 3+ dashes, optional colon
+_SEPARATOR_CELL_RE = re.compile(r'^\s*:?-{3,}:?\s*$')
+
+
 def _is_separator_row(row: List[str]) -> bool:
-    """Check if a row is a markdown table separator row (e.g., |:---|:---:|---:|)."""
-    return bool(row) and all(
-        '---' in cell or ':-:' in cell or ':--' in cell or '--:' in cell or cell.strip() == ''
-        for cell in row
-    )
+    """Check if a row is a markdown table separator row (e.g., |:---|:---:|---:|).
+
+    Uses strict per-cell regex to avoid false positives on content containing dashes.
+    """
+    return bool(row) and all(_SEPARATOR_CELL_RE.match(cell) for cell in row)
 
 
 def _extract_alignments(row: List[str]) -> List[Optional[int]]:

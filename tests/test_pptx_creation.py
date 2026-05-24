@@ -833,8 +833,8 @@ class TestCompletePresentation:
             {
                 "slide_type": "image",
                 "slide_title": "Image Slide with Caption",
-                "image_url": "https://example.invalid/sample.png",
-                "image_caption": "Image placeholder (network not available in tests)",
+                "image_url": "file:///nonexistent/sample.png",
+                "image_caption": "Image placeholder (no network call in tests)",
                 "speaker_notes": "Uses Layout 1. Images are downloaded, scaled to fit, and centered."
             },
 
@@ -843,7 +843,7 @@ class TestCompletePresentation:
             # =====================================================================
             {
                 "slide_type": "image",
-                "image_url": "https://example.invalid/large.png",
+                "image_url": "file:///nonexistent/large.png",
                 "image_caption": "Full-bleed image slide (no title)",
                 "speaker_notes": "Image slides can omit the title for a more impactful visual."
             },
@@ -1323,9 +1323,6 @@ class TestAuthorMetadata:
 if __name__ == "__main__":
     # Run tests with verbose output
     pytest.main([__file__, "-v", "-s"])
-
-
-
 
 
 

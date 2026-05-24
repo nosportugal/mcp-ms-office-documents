@@ -396,7 +396,8 @@ class PowerpointPresentation(SlideHelpers):
         """Apply footer text and/or slide numbers to all slides.
 
         Clones the footer/slide-number placeholder shapes from each slide's
-        layout into the slide itself so they become visible.
+        layout into the slide itself so they become visible. Assigns unique
+        shape IDs to avoid PPTX corruption.
         """
         from xml.sax.saxutils import escape as xml_escape
 
@@ -404,11 +405,31 @@ class PowerpointPresentation(SlideHelpers):
             layout = slide.slide_layout
             spTree = slide.shapes._spTree
 
+            # Determine next available shape ID on this slide
+            existing_ids = {
+                int(sp.get('id', 0))
+                for sp in spTree.findall(qn('p:sp') + '//' + qn('p:cNvPr'))
+            }
+            # Simpler: collect all id attributes from direct children
+            existing_ids = set()
+            for sp in spTree:
+                cNvPr = sp.find('.//' + qn('p:cNvPr'))
+                if cNvPr is None:
+                    cNvPr = sp.find('.//' + qn('p:nvSpPr') + '/' + qn('p:cNvPr'))
+                if cNvPr is not None and cNvPr.get('id'):
+                    existing_ids.add(int(cNvPr.get('id')))
+            next_id = max(existing_ids, default=0) + 1
+
             for ph in layout.placeholders:
                 idx = ph.placeholder_format.idx
 
                 if idx == 11 and self._footer_text:  # FOOTER placeholder
                     sp = copy.deepcopy(ph._element)
+                    # Assign unique shape ID
+                    cNvPr = sp.find(qn('p:nvSpPr') + '/' + qn('p:cNvPr'))
+                    if cNvPr is not None:
+                        cNvPr.set('id', str(next_id))
+                        next_id += 1
                     # Set footer text in the cloned element
                     txBody = sp.find(qn('p:txBody'))
                     if txBody is not None:
@@ -423,6 +444,11 @@ class PowerpointPresentation(SlideHelpers):
 
                 elif idx == 12 and self._show_slide_numbers:  # SLIDE_NUMBER placeholder
                     sp = copy.deepcopy(ph._element)
+                    # Assign unique shape ID
+                    cNvPr = sp.find(qn('p:nvSpPr') + '/' + qn('p:cNvPr'))
+                    if cNvPr is not None:
+                        cNvPr.set('id', str(next_id))
+                        next_id += 1
                     spTree.append(sp)
 
         logger.debug("Applied footer/slide numbers to all slides")

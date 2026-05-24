@@ -38,8 +38,10 @@ def create_presentation(
     )
     file_object = presentation.save()
 
-    text = upload_file(file_object, "pptx", filename=file_name)
-    file_object.close()
+    try:
+        text = upload_file(file_object, "pptx", filename=file_name)
+    finally:
+        file_object.close()
 
     logger.info("PowerPoint upload completed")
     return text

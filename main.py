@@ -265,7 +265,7 @@ async def create_powerpoint_presentation(
 - table: {slide_type: "table", slide_title: str, table_data: [[str]] (first row = header; optional second row with :---|:---:|---: for left/center/right column alignment), header_color?: str (hex), alternate_rows?: bool}
 - image: {slide_type: "image", slide_title?: str, image_url: str, image_caption?: str}
 - two_column: {slide_type: "two_column", slide_title: str, left_column: [{text: str, indentation_level: int}], right_column: [{text: str, indentation_level: int}], left_heading?: str, right_heading?: str}
-- chart: {slide_type: "chart", slide_title: str, chart_type: str (bar|column|line|pie|doughnut|stacked_bar|area), chart_data: {categories: [str], series: [{name: str, values: [number]}]}, has_legend?: bool, legend_position?: str}
+- chart: {slide_type: "chart", slide_title: str, chart_type: str (bar|bar_stacked|column|column_stacked|line|line_markers|pie|doughnut|area|area_stacked|scatter|radar), chart_data: {categories: [str], series: [{name: str, values: [number]}]}, has_legend?: bool, legend_position?: str}
 - quote: {slide_type: "quote", slide_title?: str, quote_text: str, quote_author?: str}
 
 All slides support optional 'speaker_notes': str field.
