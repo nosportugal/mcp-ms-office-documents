@@ -38,8 +38,8 @@ Just ask your AI to _"create a sales presentation"_ or _"draft a welcome email"_
 
 | Document Type | Tool | Highlights |
 |:---:|---|---|
-| 📊 **PowerPoint** | `create_powerpoint_presentation` | Title, section & content slides · 4:3 or 16:9 format · Custom templates |
-| 📝 **Word** | `create_word_from_markdown` | Write in Markdown, get a `.docx` · Headers, lists, tables, links, formatting |
+| 📊 **PowerPoint** | `create_powerpoint_presentation` | Title, section & content slides · 4:3 or 16:9 format · Custom templates · Author metadata, footer text & slide numbers · Inline markdown (**bold**, *italic*, ~~strikethrough~~, `code`) · Table column alignment |
+| 📝 **Word** | `create_word_from_markdown` | Write in Markdown, get a `.docx` · Headers, lists, tables, links, formatting · Superscript, subscript & highlighted text · Table column alignment, borderless tables & proportional column widths · Multi-paragraph table cells |
 | 📈 **Excel** | `create_excel_from_markdown` | Markdown tables → `.xlsx` · Formulas & cell references supported |
 | 📧 **Email** | `create_email_draft` | HTML email drafts (`.eml`) · Subject, recipients, priority, language |
 | 🗂️ **XML** | `create_xml_file` | Well-formed XML files · Auto-validates & adds XML declaration if missing |
@@ -99,6 +99,8 @@ The server is configured through environment variables in your `.env` file.
 | `API_KEY` | Protect the server with an API key (see Authentication below) | _(disabled)_ |
 | `UPLOAD_STRATEGY` | Where to save files: `LOCAL`, `S3`, `GCS`, `AZURE`, `MINIO` | `LOCAL` |
 | `SIGNED_URL_EXPIRES_IN` | How long cloud download links stay valid (seconds) | `3600` |
+| `RUN_BLOCKING_BY_ASYNCIO_THREAD_ENABLED` | Offload blocking tool work to a thread pool, keeping the event loop free for health probes & concurrent requests | `true` |
+| `RUN_BLOCKING_MAX_WORKERS` | Maximum concurrent worker threads for blocking tool calls | `4` |
 
 <details>
 <summary><strong>🔐 Authentication</strong></summary>
@@ -192,6 +194,22 @@ Set `UPLOAD_STRATEGY=MINIO` and provide:
 | `MINIO_PATH_STYLE` | Use path-style URLs (recommended for MinIO) | `true` |
 
 Make sure the bucket exists and your credentials have `PutObject`/`GetObject` permissions.
+
+</details>
+
+<details>
+<summary><strong>🏥 Performance & Health Probes</strong></summary>
+
+The server exposes health-check endpoints that Kubernetes (or any orchestrator) can use for liveness/readiness probes:
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /health` | Basic liveness check |
+| `GET /readiness` | Readiness check |
+
+**Thread-pool offloading:** By default (`RUN_BLOCKING_BY_ASYNCIO_THREAD_ENABLED=true`), all blocking document-generation work is dispatched to a bounded thread pool (`RUN_BLOCKING_MAX_WORKERS` threads, default 4). This keeps the asyncio event loop free to respond to health probes and handle concurrent requests — critical for Kubernetes deployments where blocked probes lead to pod restarts.
+
+Set `RUN_BLOCKING_BY_ASYNCIO_THREAD_ENABLED=false` only for local debugging or to rule out threading-related issues.
 
 </details>
 
